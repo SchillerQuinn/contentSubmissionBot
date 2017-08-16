@@ -11,8 +11,9 @@ var messengerButton = "<html><head><title>Facebook Messenger Bot</title></head><
 
 // JSON stuff
 const fs = require('fs');
+const util = require('util');
 const jsonQuery = require('json-query');
-const dataFile = './.data/threads.json';
+const dataFile = './.data/submissions.json';
 
 
 
@@ -25,28 +26,44 @@ app.use(bodyParser.urlencoded({
   extended: true
 }));
 
+function makeDatabase(){
+  // create the file if it doesn't exist
+  var data = {
+    "users": []
+  }; 
+  console.log('No JSON file found. Creating blank file.');
+  fs.writeFile(dataFile, JSON.stringify(data, null, 2), function(err) {
+    if (err){
+      console.log(err.code);
+      throw err; 
+    }
+  }); 
+}
+
 //get most recent version of the json file
 function getData() {
-  //check to see if the f ile exists
-  fs.access(dataFile, (err) => {
+  //check to see if the file exists
+  var fStatus =fs.stat(dataFile, (err, stats) => {
     if (err) {
       console.log(err.code);
       if (err.code == 'ENOENT') {
-        // create the file if it doesn't exist
-        var data = {
-          "users": []
-        };
-        console.log('No JSON file found. Creating blank file.');
-        fs.writeFile(dataFile, JSON.stringify(data, null, 2), function(err) {
-          if (err) throw err;
-          console.log('Failed to write.');
-        });
+        makeDatabase();
       } else {
-        console.log(err.code);
+        console.log(err.code); 
         throw err;
       }
     }
+    else if (stats.size<17){
+      console.log("Blank json file, formatting")
+      makeDatabase();
+    }
   });
+  //if it is empty, make it
+  /*fs.readFile(dataFile, (data) => {
+    if (data == null){
+    makeDatabase()
+    }
+  });*/ 
   var file = require(dataFile)
   console.log(file)
   return file;
@@ -156,9 +173,7 @@ function receivedMessage(event) {
     if (messageAttachments.type == "image") {
       console.log("it's an image");
       var file = getData(); //check the data
-      var userRecord = jsonQuery('users[ID=' + senderID + ']', {
-        data: file
-      }).value
+      var userRecord = jsonQuery('users[ID=' + senderID + ']', {data: file}).value
 
       var newMessage = {
         "date": timeOfMessage,
@@ -180,7 +195,7 @@ function receivedMessage(event) {
       }
       //update the json file
       pushData(file);
-      recievedMeme(senderID);
+      recievedMeme(event, newMessage);
     }
   }
 }
@@ -192,18 +207,18 @@ function receivedPostback(event) {
 
   // The 'payload' param is a developer-defined field which is set in a postback
   // button for Structured Messages.
-  var payload = event.postback.payload;
+  var payload = event.postback.payload.split('_');
   console.log("Received postback for user %d and page %d with payload '%s' " +
     "at %d", senderID, recipientID, payload, timeOfPostback);
 
-  switch (payload) {
-    case "Submit_Meme":
-      sendTextMessage(senderID, "They said they wanted a to submit a meme");
+  switch (payload[0]) {
+    case "CONTENT":
+      getCaption(payload);
       break;
     case "Other":
       sendTextMessage(senderID, "They didn't want to submit a meme")
     default:
-      sendTextMessage(senderID, payload);
+      //sendTextMessage(senderID, payload);
   }
 
   // When a postback is called, we'll send a message back to the sender to
@@ -211,10 +226,50 @@ function receivedPostback(event) {
   // sendTextMessage(senderID, "Postback called");
 }
 
+function recievedMeme(event, info) {
+  var recipientID = event.sender.id;
+  var image = info.imgURL;
+  var messageData = {
+    "recipient": {
+      "id": recipientID
+    },
+    "message": {
+      "attachment": {
+        "type": "template",
+        "payload": {
+          "template_type": "generic",
+          "elements": [{
+            "title": "Would you like to submit this meme?",
+            "image_url": image,
+            "subtitle": "I'm a bot that will streamline the submission process",
+            "buttons": [{
+              "type": "postback",
+              "title": "Yes",
+              "payload": "CONTENT_"+recipientID+"_"+info.date
+            }, {
+              "type": "postback",
+              "title": "Not right now",
+              "payload": "exit"
+            }]
+          }]
+        }
+      }
+    }
+  }
+  //send it 
+  callSendAPI(messageData);
+}
+
+function getCaption(payload) {
+  var senderID = payload[1];
+  var date = payload[2];
+  var file= getData();
+  var userRecord = jsonQuery('users[ID=' + senderID + ']', {data: file}).value 
+}
+
 //////////////////////////
 // Sending helpers
 //////////////////////////
-
 
 function sendTextMessage(recipientId, messageText) {
   var messageData = {
@@ -227,31 +282,6 @@ function sendTextMessage(recipientId, messageText) {
   };
   callSendAPI(messageData);
 }
-
-function recievedMeme(recipientId) {
-  var messageData = {
-    recipient: {
-      id: recipientId
-    },
-    message: {
-      text: "Would you like to submit a meme?",
-      quick_replies: [{
-          "content_type": "text",
-          "title": "Yes",
-          "payload": "Submit_Meme"
-        },
-        {
-          "content_type": "text",
-          "title": "No",
-          "payload": "Other"
-        }
-      ]
-    }
-  };
-
-  callSendAPI(messageData);
-}
-
 
 function callSendAPI(messageData) {
   request({
