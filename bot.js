@@ -15,25 +15,7 @@ const jsonQuery = require('json-query');
 const dataFile = './.data/threads.json';
 
 
-// look for the json file and load it
-try {
-  //load the json file. This will raise an error if it doens't exist
-  var file = require(dataFile);
-  console.log("JSON file already created. Loading.")
-} catch (err) {
-  //create the json file
-  var data = {
-    users: []
-  };
-  fs.writeFile(dataFile, JSON.stringify(data, null, 2), function(err) {
-    if (err) throw err;
-    console.log('No JSON file found. Creating blank file and loading.');
-  });
-  //load the JSON file
-  var file = require(dataFile);
-} finally {
-  console.log(file)
-}
+
 
 // The rest of the code implements the routes for our Express server.
 let app = express();
@@ -42,6 +24,41 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({
   extended: true
 }));
+
+//get most recent version of the json file
+function getData() {
+  //check to see if the f ile exists
+  fs.access(dataFile, (err) => {
+    if (err) {
+      console.log(err.code);
+      if (err.code == 'ENOENT') {
+        // create the file if it doesn't exist
+        var data = {
+          "users": []
+        };
+        console.log('No JSON file found. Creating blank file.');
+        fs.writeFile(dataFile, JSON.stringify(data, null, 2), function(err) {
+          if (err) throw err;
+          console.log('Failed to write.');
+        });
+      } else {
+        console.log(err.code);
+        throw err;
+      }
+    }
+  });
+  var file = require(dataFile)
+  console.log(file)
+  return file;
+};
+
+function pushData(file) {
+  fs.writeFile(dataFile, JSON.stringify(file, null, 2), function(err) {
+    if (err) return console.log(err);
+    //console.log(JSON.stringify(file),null,2);
+    console.log('Writing to ' + dataFile);
+  });
+};
 
 // Webhook validation
 app.get('/webhook', function(req, res) {
@@ -79,6 +96,7 @@ app.post('/webhook', function(req, res) {
 
       // Iterate over each messaging event
       entry.messaging.forEach(function(event) {
+
         if (event.message) {
           receivedMessage(event);
         } else if (event.postback) {
@@ -111,8 +129,15 @@ function receivedMessage(event) {
   var messageId = message.mid;
 
   var messageText = message.text;
-  var messageAttachments = message.attachments;
-
+  var messageAttachments = message.attachments; 
+  
+  //only looks at the first attachment
+  if (messageAttachments){
+    if (messageAttachments.length>1){
+      console.log("Multiple attachements. Only using the first one.")
+    }
+    messageAttachments= messageAttachments[0]
+  }
   if (messageText) {
     // If we receive a text message, check to see if it matches a keyword
     // and send back the template example. Otherwise, just echo the text we received.
@@ -123,8 +148,40 @@ function receivedMessage(event) {
       default:
         sendTextMessage(senderID, messageText);
     }
-  } else if (messageAttachments) {
-    sendAttachement(senderID);
+  } else if (messageAttachments) { //if they submitted a picture
+    //TODO: make sure they only submit one attachement
+    
+    // check to see if this is a new user
+    console.log(messageAttachments.type)
+    if (messageAttachments.type == "image") {
+      console.log("it's an image");
+      var file = getData(); //check the data
+      var userRecord = jsonQuery('users[ID=' + senderID + ']', {
+        data: file
+      }).value
+
+      var newMessage = {
+        "date": timeOfMessage,
+        "text": messageText,
+        "imgURL": messageAttachments.payload.url
+      }
+      if (userRecord === null) {
+        //if the user doesn't exist, create it
+        console.log("New user %d! Making entry.", senderID)
+        var newEntry = {
+          "ID": senderID,
+          "messages": [newMessage]
+        }
+        //console.log(JSON.stringify(newEntry, null,2));
+        file.users.push(newEntry)
+      } else {
+        //just append the new message
+        userRecord.messages.push(newMessage);
+      }
+      //update the json file
+      pushData(file);
+      recievedMeme(senderID);
+    }
   }
 }
 
